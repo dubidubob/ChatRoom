@@ -5,6 +5,9 @@
 #include <ws2tcpip.h>
 #include <WinSock2.h>
 #include <string_view>
+#include <array>
+#include <memory>
+#include "Logger.h"
 
 #if defined(_MSC_VER) // TODO 매크로 공부
 #define PRETTY_FUNCTION_MACRO __FUNCSIG__
@@ -178,6 +181,37 @@ struct RoomDeleteInternalBody : public IBody
 
 #pragma pack(pop)
 
+// Packet Table ==========================================
+// 프로토콜의 단일 원천(single source of truth).
+// "새 패킷 = enum 추가 + body 추가 + 여기 한 줄" 로 끝난다.
+// factory switch / send측 타입 지정이 여기서 자동 파생된다.
+// (내부 전용 패킷 UserDisconnectedReq / RoomDeleteInternal 은 소켓을 타지 않으므로 제외)
+#define PACKET_BODY_TABLE(X)                        \
+	X(LoginReq,            LoginReqBody)            \
+	X(LoginRes,            LoginResBody)            \
+	X(RoomCreateReq,       CreateRoomReqBody)       \
+	X(RoomCreateRes,       CreateRoomResBody)       \
+	X(RoomJoinReq,         JoinRoomReqBody)         \
+	X(RoomJoinRes,         JoinRoomResBody)         \
+	X(RoomQuitReq,         QuitRoomReqBody)         \
+	X(UserlistReq,         UserListReqBody)         \
+	X(UserlistRes,         UserListResBody)         \
+	X(RoomlistReq,         RoomListReqBody)         \
+	X(RoomlistRes,         RoomListResBody)         \
+	X(ChattingReq,         ChattingReqBody)         \
+	X(ChattingBroadcast,   ChattingBroadcastBody)   \
+	X(ChattingPended,      ChattingBroadcastBody)   \
+	X(ChattingConfirm,     ChattingConfirmReqBody)  \
+	X(WhisperReq,          WhisperReqBody)          \
+	X(WhisperFailRes,      WhisperFailedResBody)    \
+	X(WhisperDeliveredRes, WhisperDeliveredResBody)
+
+// EPacketType -> Body 매핑. 특수화가 없는 타입은 컴파일 에러(= 테이블에 안 올린 타입).
+template<EPacketType T> struct PacketBodyOf;
+#define X(type, body) template<> struct PacketBodyOf<EPacketType::type> { using Type = body; };
+PACKET_BODY_TABLE(X)
+#undef X
+
 // Helpers================================================s
 template<typename ConcreteIBody>
 void SendPacket(SOCKET sock, PacketHeader header, const ConcreteIBody& body)
@@ -190,12 +224,14 @@ void SendPacket(SOCKET sock, PacketHeader header, const ConcreteIBody& body)
 	send(sock, sendBuffer, totalLength, 0); // TODO : 반환값 체크하기!
 }
 
-template<typename ConcreteIBody>
-void SendPacket(SOCKET sock, EPacketType messageType, const ConcreteIBody& body)
+// EPacketType 을 템플릿 인자로 받아, body 타입을 테이블과 컴파일 타임에 대조한다.
+// 잘못된 body 를 넘기면 컴파일 에러 → type/bodyLength 가 어긋날 수 없다.
+template<EPacketType T>
+void SendPacket(SOCKET sock, const typename PacketBodyOf<T>::Type& body)
 {
 	PacketHeader header;
-	header.type = messageType;
-	header.bodyLength = static_cast<UINT16>(sizeof(ConcreteIBody));
+	header.type = T;
+	header.bodyLength = static_cast<UINT16>(sizeof(typename PacketBodyOf<T>::Type));
 
 	SendPacket(sock, header, body);
 }
@@ -205,10 +241,38 @@ std::shared_ptr<IBody> CreateBody(const char* rawData, UINT16 bodyLength)
 {
 	if (bodyLength != sizeof(ConcreteIBody))
 	{
-		std::cout << "ChatManager : " << PRETTY_FUNCTION_MACRO << ": Packet Length 불일치\n";
+		LOG_WARN("Protocol") << PRETTY_FUNCTION_MACRO << ": Packet Length 불일치";
 		return nullptr;
 	}
 
 	const ConcreteIBody* rawBody = reinterpret_cast<const ConcreteIBody*>(rawData);
 	return std::make_shared<ConcreteIBody>(*rawBody); // 제대로 된 vptr로 초기화 // TODO : 힙 복사 이슈+vptr 바이트까지 전송됨  shared ptr이냐 raw ptr+memcpy이냐... => raw pointer?
+}
+
+// Packet Factory ========================================
+// 손수 작성하던 두 벌의 switch(Session::CreateServerBody / ChatClient::CreateClientBody)를
+// 테이블 기반 등록형 팩토리 하나로 대체한다. 역방향 검증은 각 핸들러의 몫으로 넘긴다
+// (팩토리는 순수 역직렬화만 담당).
+using BodyCreator = std::shared_ptr<IBody>(*)(const char*, UINT16);
+constexpr size_t PACKET_TYPE_COUNT = static_cast<size_t>(EPacketType::None) + 1;
+
+inline std::shared_ptr<IBody> CreatePacketBody(const PacketHeader* header)
+{
+	static const std::array<BodyCreator, PACKET_TYPE_COUNT> creators = [] {
+		std::array<BodyCreator, PACKET_TYPE_COUNT> arr{};
+#define X(type, body) arr[static_cast<size_t>(EPacketType::type)] = &CreateBody<body>;
+		PACKET_BODY_TABLE(X)
+#undef X
+		return arr;
+	}();
+
+	const size_t index = static_cast<size_t>(header->type);
+	if (index >= creators.size() || creators[index] == nullptr)
+	{
+		LOG_WARN("Protocol") << "등록되지 않은 패킷 타입: " << static_cast<int>(header->type);
+		return nullptr;
+	}
+
+	const char* bodyData = reinterpret_cast<const char*>(header) + sizeof(PacketHeader);
+	return creators[index](bodyData, header->bodyLength);
 }

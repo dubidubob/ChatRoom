@@ -1,13 +1,12 @@
 ﻿//ChatManager.h
 #pragma once
 #include <unordered_map>
-#include <queue>
 #include <string>
-#include <mutex>
 #include <shared_mutex>
 
 #include "Protocol.h"		// Network Packet
 #include "ServerInternalTypes.h"	// Server Packet
+#include "SafeQueue.h"
 
 #include "ChatRoom.h"
 
@@ -70,9 +69,7 @@ private:
 	std::unordered_map<UINT, std::shared_ptr<ChatRoom>> m_rooms;// 각 룸의 정보, 룸 당 하나의 thread
 
 	// Data
-	std::mutex m_queueMutex;
-	std::condition_variable m_condition;
-	std::queue<ServerToManagerPacket> m_clientMessageQueue; // 처리해야할 큐
+	SafeQueue<ServerToManagerPacket> m_queue; // 처리해야 할 패킷 큐 (thread-safe)
 
 	// ID 발급기
 	std::atomic<UINT> m_nextRoomID{ 1 };

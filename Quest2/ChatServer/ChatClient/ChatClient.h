@@ -14,22 +14,20 @@
 class ChatClient
 {
 public:
-	ChatClient() : m_serverSocket(INVALID_SOCKET), m_packetAssembler(&ChatClient::CreateClientBody) {};
+	ChatClient() : m_serverSocket(INVALID_SOCKET), m_packetAssembler(&CreatePacketBody) {};
 	~ChatClient();
 
 	bool ConnectServer(const std::string& serverIP, unsigned short port);
 	void Run();
 
-private:
-	enum class EState : uint8_t
-	{
-		NewLoggingIn,
-		OldLoggingIn,
-		WaitingLogIn,
-
-		InLobby,
-		InRoom
-	};
+	// 커맨드가 호출하는 액션들 (IClientCommand::Execute 에서 사용)
+	void ReqCreateRoom(const std::string& roomTitle);
+	void ReqJoinRoom(UINT roomID);
+	void ReqQuitRoom();
+	void ReqUserList();
+	void ReqRoomList();
+	void ReqWhisper(std::string_view targetUser, std::string_view message); // string view : 문자열 소유X, readonly view <-> const std::string& : 불필요한 메모리 복사 방지
+	void ReqChat(const std::string& message);
 
 private:
 	void ReceiveRespond();
@@ -46,21 +44,11 @@ private:
 	void ResWhisperFailedRes();
 
 	void ReqLogin(const std::string& username, bool isOldOkay);
-	void ReqCreateRoom(const std::string& roomTitle);
-	void ReqJoinRoom(UINT roomID);
-	void ReqQuitRoom();
-	void ReqUserList();
-	void ReqRoomList();
-	void ReqWhisper(std::string_view targetUser, std::string_view message); // string view : 문자열 소유X, readonly view <-> const std::string& : 불필요한 메모리 복사 방지
-	void ReqChat(const std::string& message);
 	void ReqUpdateLastReadChat();
-
-	static std::shared_ptr<IBody> CreateClientBody(const PacketHeader* header);
 
 	void GetLine(std::string& outInput, EState& outState);
 
 	bool IsValidUsername(std::string& username);
-	bool IsValidStringLength(std::string& str, int maxLength, std::string log);
 
 private:
 	SOCKET m_serverSocket = INVALID_SOCKET;	//서버와의 통신 소켓

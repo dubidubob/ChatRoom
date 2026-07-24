@@ -13,9 +13,18 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Common">
+      <UniqueIdentifier>{a7c3f1d2-6b4e-4c8a-9f2d-1e5b7c9a3f4d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ChatClient.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="ClientCommand.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandParser.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="clientMain.cpp">
@@ -26,8 +35,17 @@
     <ClInclude Include="ChatClient.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="ClientCommand.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandParser.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="ClientInternalTypes.h">
       <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Common\Logger.h">
+      <Filter>Common</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

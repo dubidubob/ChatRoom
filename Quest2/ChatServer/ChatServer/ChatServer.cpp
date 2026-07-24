@@ -3,6 +3,7 @@
 
 #include "ChatServer.h"
 #include "Protocol.h"
+#include "Logger.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -37,7 +38,7 @@ void ChatServer::InitializeServer()
 	bind(m_listenSock, (sockaddr*)&serverAddr, sizeof(serverAddr));
 	listen(m_listenSock, SOMAXCONN); // 소켓 상태를 들을 수 있는 상태로 변경: 설정 함수
 
-	std::cout << "ChatServer: 서버가 " << PORTNUM << " 포트에서 대기 중..." << std::endl;
+	LOG_INFO("ChatServer") << "서버가 " << PORTNUM << " 포트에서 대기 중...";
 }
 
 void ChatServer::NetworkLoop()
@@ -58,7 +59,7 @@ void ChatServer::NetworkLoop()
 		int selectResult = select(0, &reads, nullptr, nullptr, nullptr);
 		if (selectResult == SOCKET_ERROR)
 		{
-			std::cout << "ChatServer: SOCKET_ERROR : 여기 걸릴라나?\n";
+			LOG_ERROR("ChatServer") << "select() SOCKET_ERROR: " << WSAGetLastError();
 			break;
 		}
 
@@ -68,13 +69,13 @@ void ChatServer::NetworkLoop()
 			SOCKET clientSock = accept(m_listenSock, nullptr, nullptr);
 			if (clientSock != INVALID_SOCKET)
 			{
-				std::cout << "ChatServer: 새 클라이언트 접속: Socket " << clientSock << std::endl;
+				LOG_INFO("ChatServer") << "새 클라이언트 접속: Socket " << clientSock;
 
 				m_sockets[clientSock] = std::make_shared<Session>();
 			}
 			else
 			{
-				std::cout << "ChatServer: INVALID_SOCKET : 여기 걸릴라나?\n";
+				LOG_WARN("ChatServer") << "accept() INVALID_SOCKET: " << WSAGetLastError();
 			}
 		}
 
@@ -106,7 +107,7 @@ void ChatServer::NetworkLoop()
 				int error = WSAGetLastError();
 				if (error == WSAEWOULDBLOCK) 
 				{
-					std::cout << "ChatServer: 수신 버퍼에 데이터가 없음!" << std::endl;
+					LOG_DEBUG("ChatServer") << "수신 버퍼에 데이터 없음 (WSAEWOULDBLOCK)";
 				}
 				else 
 				{

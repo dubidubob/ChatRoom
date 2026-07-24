@@ -1,17 +1,18 @@
 ﻿#include "ChatRoom.h"
 #include "ServerInternalTypes.h"
+#include "Logger.h"
 
 #include <thread>
 
 ChatRoom::~ChatRoom()
 {
-	m_queueCondition.notify_one();
+	m_queue.Close(); // Run 루프가 빈 큐에서 대기 중이어도 깨워서 종료시킴
 	if (m_thread.joinable())
 	{
 		m_thread.join();
 	}
 
-	std::cout << "ChatRoom " << m_roomID << " 스레드 정리 완료. 룸 객체 파괴.\n";
+	LOG_INFO("ChatRoom") << "Room " << m_roomID << " 스레드 정리 완료. 룸 객체 파괴.";
 }
 
 void ChatRoom::Init(ManagerToRoomPacket user, RoomDeleteCallback callback)
@@ -25,11 +26,7 @@ void ChatRoom::Init(ManagerToRoomPacket user, RoomDeleteCallback callback)
 
 void ChatRoom::PushPacket(const ManagerToRoomPacket& data)
 {
-	{
-		std::lock_guard<std::mutex> lock(m_queueMutex);
-		m_packetQueue.push(data);
-	}
-	m_queueCondition.notify_one();
+	m_queue.Push(data);
 }
 
 void ChatRoom::DisconnectedUser(const std::string& username)
@@ -38,7 +35,7 @@ void ChatRoom::DisconnectedUser(const std::string& username)
 	auto it = m_users.find(username);
 	if (it == m_users.end())
 	{
-		std::cout << "ChatRoom : Disconnected " << username << "없는디\n";
+		LOG_WARN("ChatRoom") << "Disconnected: 유저 " << username << " 를 찾을 수 없음";
 		return;
 	}
 	it->second.isLive = false;
@@ -54,7 +51,7 @@ void ChatRoom::ReconnectedUser(const ManagerToRoomPacket& packetContext)
 		auto it = m_users.find(packetContext.username);
 		if (it == m_users.end())
 		{
-			std::cout << "ChatRoom : 없는데 reconnected 래요...\n";
+			LOG_WARN("ChatRoom") << "Reconnected: 유저 " << packetContext.username << " 가 방에 없음";
 			return;
 		}
 		it->second.isLive = true;
@@ -62,32 +59,22 @@ void ChatRoom::ReconnectedUser(const ManagerToRoomPacket& packetContext)
 		lastReadIndex = it->second.lastReadIndex;
 	}
 	
-	std::cout << "Chatroom : 유저 참여: " << packetContext.username << std::endl;
+	LOG_INFO("ChatRoom") << "유저 재접속: " << packetContext.username;
 	SendUnsendedMessages(packetContext.sock, lastReadIndex); // TODO : pended message를 다 출력하고 실시간 chatting을 받게 해야한다. : islive를 false로 둔 후에~
 }
 
 void ChatRoom::Run()
 {
-	while (m_isRun)
+	while (true)
 	{
-		ManagerToRoomPacket packetContext;
+		auto packetContext = m_queue.Pop();
+		if (!packetContext) // 큐가 닫힘 → 종료
 		{
-			std::unique_lock<std::mutex> lock(m_queueMutex); // TODO : unique랑 lock guard의 차이
-			m_queueCondition.wait(lock, [this] {
-				return !m_packetQueue.empty() || !m_isRun;
-				});
-
-			if (!m_isRun)
-			{
-				std::cout << "ChatRoom : 중간 탈출이 있나? \n";
-				break;
-			}
-
-			packetContext = m_packetQueue.front();
-			m_packetQueue.pop();
+			LOG_DEBUG("ChatRoom") << "Run 루프 종료 (큐 닫힘)";
+			break;
 		}
 
-		ManagePacketQueue(packetContext);
+		ManagePacketQueue(*packetContext);
 	}
 }
 
@@ -121,12 +108,12 @@ void ChatRoom::MngJoinRoom(ManagerToRoomPacket packetContext)
 		auto [it, inserted] = m_users.try_emplace(packetContext.username, UserRoomData{ packetContext.sock, true, 0 }); // TODO : 이게 뭐여?
 		if (!inserted)
 		{
-			std::cout << "ChatRoom : Room " << m_roomID << ": User " << packetContext.username << " 가 들어올 수 없는데?\n";
+			LOG_WARN("ChatRoom") << "Room " << m_roomID << ": User " << packetContext.username << " 중복 입장 시도";
 			return;
 		}
 	}
 
-	std::cout << "ChatRoom : Room " << m_roomID << ": User " << packetContext.username << " joined.\n";
+	LOG_INFO("ChatRoom") << "Room " << m_roomID << ": User " << packetContext.username << " joined.";
 	BroadcastPacket(packetContext.username, "님이 들어왔습니다.");
 }
 
@@ -150,7 +137,7 @@ void ChatRoom::MngQuit(ManagerToRoomPacket packetContext)
 
 	if (userRemoved)
 	{
-		std::cout << "ChatRoom : Room " << m_roomID << ": User " << packetContext.username << " quit.\n";
+		LOG_INFO("ChatRoom") << "Room " << m_roomID << ": User " << packetContext.username << " quit.";
 
 		BroadcastPacket(packetContext.username, "님이 나가셨습니다.");
 	}
@@ -166,14 +153,14 @@ void ChatRoom::MngQuit(ManagerToRoomPacket packetContext)
 
 	if (shouldTerminate)
 	{
-		if (m_isRun.exchange(false)) // TODO : 단 한 번만 실행!
+		if (m_isRun.exchange(false)) // 단 한 번만 실행
 		{
 			if (m_terminationCallback) // ChatManager에게 해당 객체 삭제 요청
 			{
 				m_terminationCallback(m_roomID);
 			}
 
-			m_queueCondition.notify_one();
+			m_queue.Close(); // Run 루프 깨워 종료
 		}
 	}
 }
@@ -240,7 +227,7 @@ void ChatRoom::SendUnsendedMessages(SOCKET sock, UINT lastReadIndex)
 			strncpy_s(resBody.sendingUser, MAX_USERNAME_LEN, msg.username.c_str(), _TRUNCATE);
 			strncpy_s(resBody.message, MAX_MESSAGE_LEN, msg.message.c_str(), _TRUNCATE); 
 			
-			SendPacket(sock, EPacketType::ChattingBroadcast, resBody);
+			SendPacket<EPacketType::ChattingBroadcast>(sock, resBody);
 		}
 	}
 }

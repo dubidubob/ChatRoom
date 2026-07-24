@@ -56,5 +56,11 @@
     <ClInclude Include="..\Common\ServerInternalTypes.h">
       <Filter>Common</Filter>
     </ClInclude>
+    <ClInclude Include="..\Common\Logger.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Common\SafeQueue.h">
+      <Filter>Common</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

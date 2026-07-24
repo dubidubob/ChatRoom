@@ -1,5 +1,6 @@
 ﻿// ChatManager.cpp
 #include "ChatManager.h"
+#include "Logger.h"
 
 #include <memory>
 
@@ -7,29 +8,19 @@ void ChatManager::Run()
 {
 	while (true)
 	{
-		ServerToManagerPacket packetContext;
+		auto packetContext = m_queue.Pop();
+		if (!packetContext) // 큐가 닫힘 → 종료
 		{
-			std::cout << "ChatManager : 저 잡니다? \n";
-			std::unique_lock<std::mutex> lock(m_queueMutex);
-			m_condition.wait(lock, [this] { return !m_clientMessageQueue.empty(); }); // 큐 비었으면(람다식이 false를 반환하면) lock 풀고+스레드 잔다 // notify 오면 lock 잠그고, 깨서 람다 재평가 // TODO : 세부 동작 방식 공부
-			std::cout << "ChatManager : 저 깹니다? (잡니다 없으면 데드락) \n";
-
-			packetContext = m_clientMessageQueue.front();
-			m_clientMessageQueue.pop();
+			break;
 		}
 
-		ManageMessageQueue(packetContext);
+		ManageMessageQueue(*packetContext);
 	}
 }
 
 void ChatManager::PushMessageQueue(ServerToManagerPacket packetContext)
 {
-	{
-		std::lock_guard<std::mutex> lock(m_queueMutex);
-		m_clientMessageQueue.push(std::move(packetContext));
-	}
-
-	m_condition.notify_one();
+	m_queue.Push(std::move(packetContext));
 }
 
 void ChatManager::ManageMessageQueue(ServerToManagerPacket packetContext) // TODO : Manage냐 Process냐
@@ -77,7 +68,7 @@ void ChatManager::ManageMessageQueue(ServerToManagerPacket packetContext) // TOD
 	case EPacketType::RoomDeleteInternal:
 		{
 			auto body = std::static_pointer_cast<RoomDeleteInternalBody>(packetContext.body);
-			std::cout << "ChatManager: Room " << body->roomID << " 정리 작업 시작.\n";
+			LOG_INFO("ChatManager") << "Room " << body->roomID << " 정리 작업 시작.";
 			m_rooms.erase(body->roomID);
 		}
 		break;
@@ -100,7 +91,7 @@ void ChatManager::MngLoginClient(ServerToManagerPacket packetContext)
 		m_users[username] = UserData(LOBBY_ID, sock);
 		m_socketToUsername[sock] = username;
 
-		std::cout << "ChatServer : 유저 이름 " << username << "으로 업데이트!\n";
+		LOG_INFO("ChatManager") << "유저 이름 " << username << " 으로 업데이트!";
 	}
 	else if (isOldUserOkay) // 기존 회원에 대한 클라이언트 접속 의사 확인
 	{
@@ -123,22 +114,22 @@ void ChatManager::MngLoginClient(ServerToManagerPacket packetContext)
 	if (isNewUser)
 	{
 		resBody.isCanLogIn = true;
-		std::cout << "ChatManager : 신규 유저 회원 가입 : " << username << "\n";
+		LOG_INFO("ChatManager") << "신규 유저 회원 가입: " << username;
 	}
 	else if (isOldUserOkay) // 기존 유저 접속 허용 + room number 줌
 	{
 		resBody.isCanLogIn = true;
-		std::cout << "ChatManager : 기존 유저 접속 완료 : " << username << "\n";
+		LOG_INFO("ChatManager") << "기존 유저 접속 완료: " << username;
 	}
 	else // 기존 유저 아직 허용 안 함
 	{
 		resBody.isCanLogIn = false;
-		std::cout << "ChatManager : 기존 유저 접속 시도 : " << username << "\n";
+		LOG_WARN("ChatManager") << "기존 유저 접속 시도(거부): " << username;
 	}
 
 	resBody.roomID = joinedRoomNum;
 
-	SendPacket(packetContext.sock, EPacketType::LoginRes, resBody);
+	SendPacket<EPacketType::LoginRes>(packetContext.sock, resBody);
 
 	if (isOldUserOkay && joinedRoomNum!=LOBBY_ID) // 기존 접속자는 곧바로 방 안으로 보낸다
 	{
@@ -197,7 +188,7 @@ void ChatManager::MngCreateRoom(ServerToManagerPacket packetContext)
 			newRoom->Init(ManagerToRoomPacket(packetContext, username), callback);
 			m_rooms[roomID] = newRoom;
 
-			std::cout << "ChatManager : 새 채팅방 생성: " << roomname << " (ID: " << roomID << ")" << std::endl;
+			LOG_INFO("ChatManager") << "새 채팅방 생성: " << roomname << " (ID: " << roomID << ")";
 		}
 	}
 
@@ -208,7 +199,7 @@ void ChatManager::MngCreateRoom(ServerToManagerPacket packetContext)
 		resBody.newRoomID = roomID;
 	}
 
-	SendPacket(packetContext.sock, EPacketType::RoomCreateRes, resBody);
+	SendPacket<EPacketType::RoomCreateRes>(packetContext.sock, resBody);
 }
 
 void ChatManager::MngJoinRoom(ServerToManagerPacket packetContext)
@@ -223,13 +214,13 @@ void ChatManager::MngJoinRoom(ServerToManagerPacket packetContext)
 	{
 		m_users[username].joinedRoomID = roomID;
 		SendToRoom(roomID, packetContext);
-		std::cout << "ChatManager : 유저 참여: " << username << std::endl;
+		LOG_INFO("ChatManager") << "유저 방 참여: " << username << " -> Room " << roomID;
 	}
 
 	JoinRoomResBody resBody;
 	resBody.isSuccess = isSuccess;
 
-	SendPacket(packetContext.sock, EPacketType::RoomJoinRes, resBody);
+	SendPacket<EPacketType::RoomJoinRes>(packetContext.sock, resBody);
 }
 
 void ChatManager::MngChatting(ServerToManagerPacket packetContext)
@@ -275,7 +266,7 @@ void ChatManager::MngDisconnectUser(ServerToManagerPacket packetContext)
 		}
 	}
 
-	std::cout << "ChatServer: 클라이언트 접속 끊김: User: " << username << std::endl;
+	LOG_INFO("ChatManager") << "클라이언트 접속 끊김: User: " << username;
 }
 
 void ChatManager::MngUserList(ServerToManagerPacket packetContext)
@@ -287,7 +278,7 @@ void ChatManager::MngUserList(ServerToManagerPacket packetContext)
 	{
 		if (resBody.userCount >= MAX_LIST_COUNT)
 		{
-			std::cout << "ChatManager: " << MAX_LIST_COUNT << "를 넘어갑니다. 자릅니다. \n";
+			LOG_WARN("ChatManager") << "UserList: " << MAX_LIST_COUNT << " 초과, 잘라냄.";
 			break; // TODO : 오버플로우 명시적 방지
 		}
 
@@ -298,7 +289,7 @@ void ChatManager::MngUserList(ServerToManagerPacket packetContext)
 		}
 	}
 
-	SendPacket(packetContext.sock, EPacketType::UserlistRes, resBody);
+	SendPacket<EPacketType::UserlistRes>(packetContext.sock, resBody);
 }
 
 void ChatManager::MngRoomList(ServerToManagerPacket packetContext)
@@ -310,7 +301,7 @@ void ChatManager::MngRoomList(ServerToManagerPacket packetContext)
 	{
 		if (resBody.roomCount >= MAX_LIST_COUNT)
 		{
-			std::cout << "ChatManager: " << MAX_LIST_COUNT << "를 넘어갑니다. 자릅니다. \n";
+			LOG_WARN("ChatManager") << "RoomList: " << MAX_LIST_COUNT << " 초과, 잘라냄.";
 			break; // TODO : 오버플로우 명시적 방지
 		}
 
@@ -321,7 +312,7 @@ void ChatManager::MngRoomList(ServerToManagerPacket packetContext)
 		}
 	}
 
-	SendPacket(packetContext.sock, EPacketType::RoomlistRes, resBody);
+	SendPacket<EPacketType::RoomlistRes>(packetContext.sock, resBody);
 }
 
 void ChatManager::MngWhisper(ServerToManagerPacket packetContext)
@@ -352,15 +343,15 @@ void ChatManager::MngWhisper(ServerToManagerPacket packetContext)
 			strncpy_s(resBody.sendingUser, MAX_USERNAME_LEN, sendingUsername.c_str(), _TRUNCATE);
 			strncpy_s(resBody.message, MAX_MESSAGE_LEN, reqBody->message, _TRUNCATE);
 
-			std::cout << "ChatManager : 귓말 보냈다구욧!\n";
-			SendPacket(receivingSock, EPacketType::WhisperDeliveredRes, resBody);
+			LOG_INFO("ChatManager") << "귓말 전달: " << sendingUsername << " -> " << reqBody->receivingUser;
+			SendPacket<EPacketType::WhisperDeliveredRes>(receivingSock, resBody);
 		}	
 	}
 	else
 	{
 		WhisperFailedResBody resBody;
-		std::cout << "ChatManager : 귓말 실패했다구욧!!\n";
-		SendPacket(packetContext.sock, EPacketType::WhisperFailRes, resBody); // send back
+		LOG_WARN("ChatManager") << "귓말 실패: 수신자 " << reqBody->receivingUser << " 없음/오프라인";
+		SendPacket<EPacketType::WhisperFailRes>(packetContext.sock, resBody); // send back
 	}
 }
 
@@ -376,7 +367,7 @@ void ChatManager::SendToRoom(UINT roomID, const ServerToManagerPacket& packetCon
 		}
 		else
 		{
-			std::cout << "ChatManager : room이 없음!\n";
+			LOG_WARN("ChatManager") << "SendToRoom: Room " << roomID << " 없음";
 		}
 	}
 }
@@ -387,13 +378,13 @@ bool ChatManager::CanJoinRoom(UINT roomID)
 
 	if (it == m_rooms.end() || !it->second->IsAlive())	// 1. 룸 없거나, 없어져야 하면 join 못함
 	{
-		std::cout << "ChatManager : Join이 안 돼! Room ID가 없삼!\n";
+		LOG_WARN("ChatManager") << "Join 거부: Room " << roomID << " 없음/비활성";
 		return false;
 	}
 
 	if (it->second->IsRoomFull())						// 2. 룸에 인원 다 찼으면 join 못함
 	{
-		std::cout << "ChatManager : SendToRoom이 안 돼! 인원 다 참!\n";
+		LOG_WARN("ChatManager") << "Join 거부: Room " << roomID << " 인원 초과";
 		return false;
 	}
 
@@ -408,6 +399,6 @@ bool ChatManager::FindUsername(SOCKET sock, std::string& outUsername)
 		return true;
 	}
 
-	std::cout << "해당 sock의 username 없삼!\n";
+	LOG_WARN("ChatManager") << "FindUsername: sock " << sock << " 에 매핑된 username 없음";
 	return false;
 }

@@ -3,12 +3,11 @@
 #include <unordered_map>
 #include <mutex>
 #include <shared_mutex>
-#include <condition_variable>
-#include <queue>
 #include <memory>
 
-#include "Protocol.h" 
+#include "Protocol.h"
 #include "ServerInternalTypes.h"
+#include "SafeQueue.h"
 
 class ChatRoom
 {
@@ -70,9 +69,7 @@ private:
 	std::thread m_thread;
 	std::atomic<bool> m_isRun = true;
 
-	std::mutex m_queueMutex;
-	std::condition_variable m_queueCondition;
-	std::queue<ManagerToRoomPacket> m_packetQueue;
+	SafeQueue<ManagerToRoomPacket> m_queue;
 
 	std::shared_mutex m_messagesMutex;
 	std::vector<RoomMessage> m_messages; 

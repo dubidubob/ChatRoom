@@ -1,7 +1,7 @@
 ﻿// ChatClient.cpp
 #include "ChatClient.h"
-#include <limits> // std::numeric_limits<UINT>::max
-#include <charconv> // from_chars
+#include "CommandParser.h"
+#include "Logger.h"
 
 ChatClient::~ChatClient()
 {
@@ -16,7 +16,7 @@ ChatClient::~ChatClient()
 
 	WSACleanup();
 
-	std::cout << "Client 소통 끝~\n";
+	LOG_INFO("ChatClient") << "연결 종료, 클라이언트 정리 완료.";
 }
 
 bool ChatClient::ConnectServer(const std::string& serverIP, unsigned short port)
@@ -33,7 +33,7 @@ bool ChatClient::ConnectServer(const std::string& serverIP, unsigned short port)
 
 	if (connect(m_serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
 	{
-		std::cout << "서버 Connect가 안 된다..." << std::endl;
+		LOG_ERROR("ChatClient") << "서버 연결 실패: " << WSAGetLastError();
 		closesocket(m_serverSocket);
 		m_serverSocket = INVALID_SOCKET;
 
@@ -97,133 +97,13 @@ void ChatClient::Run()
 			continue;
 		}
 
-		// 로그인 된 거 보장
+		// 로그인 된 거 보장: 입력을 커맨드로 파싱해 실행한다.
 		GetLine(userInput, curState);
 
-		if (userInput == "/quit" && curState == EState::InLobby)
+		auto command = CommandParser::Parse(userInput, curState);
+		if (!command->Execute(*this)) // ExitCommand 등은 false 반환 → 루프 종료
 		{
 			break;
-		}
-
-		if (userInput.rfind("/", 0) == 0) // 명령어
-		{
-			if (userInput.rfind("/create ", 0) == 0) // TODO : 함수에 넣어버릴까?
-			{
-				if (curState != EState::InLobby)
-				{
-					std::cout << "[오류]  현재 " << m_joinedRoomID << "번 방에 있습니다. 나와서 만들어주세요.(예: / quit)" << std::endl;
-					continue;
-				}
-
-				std::string roomTitle = userInput.substr(8); // /create  이후의 문자열 추출
-				if (roomTitle.empty())
-				{
-					std::cout << "[오류] 방 제목을 입력해주세요. (예: /create MyRoom)" << std::endl;
-					continue;
-				}
-				
-				if (!IsValidStringLength(roomTitle, MAX_ROOM_TITLE_LEN, "방 제목"))
-				{
-					continue;
-				}
-
-				else
-				{
-					ReqCreateRoom(roomTitle);
-				}
-			}
-			else if (userInput.rfind("/join ", 0) == 0)
-			{
-				if (curState != EState::InLobby)
-				{
-					std::cout << "[오류]  현재 " << m_joinedRoomID << "번 방에 있습니다. 나와서 들어가주세요.(예: / quit)" << std::endl;
-					continue;
-				}
-				try
-				{
-					std::string roomStr = userInput.substr(6);
-					UINT roomID = 0;
-					auto [ptr, error] = std::from_chars(roomStr.data(), roomStr.data() + roomStr.size(), roomID); // 문자열 변환
-
-					if (error == std::errc::invalid_argument || error == std::errc::result_out_of_range) // 숫자로 변환 안ㄷ ㅚㄹ 때, 타입의 범위를 초과할 때
-					{
-						std::cout << "[오류] 유효하지 않은 방 번호입니다." << std::endl;
-						continue;
-					}
-					if (roomID > (std::numeric_limits<UINT>::max)())
-					{
-						throw std::out_of_range("Room ID가 너무 큽니다.");
-					}
-
-					ReqJoinRoom(roomID);
-				}
-				catch (const std::invalid_argument& e)
-				{
-					std::cout << "[오류] 유효한 방 번호를 입력해주세요. (숫자만 가능)" << std::endl;
-				}
-				catch (const std::out_of_range& e)
-				{
-					std::cout << "[오류] 방 번호가 너무 큽니다." << std::endl;
-				}
-			}
-			else if (userInput == "/quit")
-			{
-				ReqQuitRoom();
-			}
-			else if (userInput == "/roomlist")
-			{
-				ReqRoomList();
-			}
-			else if (userInput == "/userlist")
-			{
-				ReqUserList();
-			}
-			else if (userInput.rfind("/whisper ", 0) == 0)
-			{
-				std::string_view view(userInput);
-
-				size_t targetStart = 9; // /whisper
-				size_t messageStart = view.find(' ', targetStart);
-
-				if (messageStart != std::string_view::npos)
-				{
-					std::string_view targetUser = view.substr(targetStart, messageStart - targetStart);
-					std::string_view message = view.substr(messageStart + 1);
-
-					if (!targetUser.empty() && !message.empty())
-					{
-						ReqWhisper(targetUser, message);
-					}
-					else
-					{
-						std::cout << "[오류] 대상 이름이나 메시지가 비어있습니다." << std::endl;
-					}
-				}
-				else
-				{
-					std::cout << "[오류] 사용법: /whisper [대상] [메시지] (예: /whisper User1 안녕)" << std::endl;
-				}
-			}
-			else
-			{
-				std::cout << "[오류] 알 수 없는 명령어입니다." << std::endl;
-			}
-		}
-		else
-		{
-			if (!IsValidStringLength(userInput, MAX_MESSAGE_LEN, "메시지"))
-			{
-				continue;
-			}
-
-			if (curState == EState::InRoom)
-			{
-				ReqChat(userInput);
-			}
-			else
-			{
-				std::cout << "먼저 방에 참여해야 채팅을 보낼 수 있습니다. (예: /join [방ID])" << std::endl;
-			}
 		}
 	}
 }
@@ -248,45 +128,6 @@ void ChatClient::ReceiveRespond()
 		{
 			ProcessPacket(context.type, context.body);
 		}
-	}
-}
-
-std::shared_ptr<IBody> ChatClient::CreateClientBody(const PacketHeader* header)
-{
-	const char* bodyData = reinterpret_cast<const char*>(header) + sizeof(PacketHeader);
-
-	switch (header->type)
-	{
-	case EPacketType::LoginRes:
-		return CreateBody<LoginResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::RoomCreateRes:
-		return CreateBody<CreateRoomResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::RoomJoinRes:
-		return CreateBody<JoinRoomResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::ChattingBroadcast:
-		return CreateBody<ChattingBroadcastBody>(bodyData, header->bodyLength);
-
-	case EPacketType::ChattingPended:
-		return CreateBody<ChattingBroadcastBody>(bodyData, header->bodyLength);
-
-	case EPacketType::WhisperFailRes:
-		return CreateBody<WhisperFailedResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::WhisperDeliveredRes:
-		return CreateBody<WhisperDeliveredResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::RoomlistRes:
-		return CreateBody<RoomListResBody>(bodyData, header->bodyLength);
-
-	case EPacketType::UserlistRes:
-		return CreateBody<UserListResBody>(bodyData, header->bodyLength);
-
-	default:
-		std::cout << (int)header->type << "메시지 타입 이거 뭐임? 해석 안 됨\n";
-		return nullptr;
 	}
 }
 
@@ -332,17 +173,6 @@ bool ChatClient::IsValidUsername(std::string& username)
 	return true;
 }
 
-
-bool ChatClient::IsValidStringLength(std::string& str, int maxLength, std::string log)
-{
-	if (str.length() >= maxLength)
-	{
-		std::cout << "[오류] " << log << " 너무 깁니다. " << maxLength - 1 << "자 미만으로 입력!" << std::endl;
-		return false;
-	}
-	return true;
-}
-
 void ChatClient::ProcessPacket(EPacketType messageType, std::shared_ptr<IBody> packet)
 {
 	switch (messageType)
@@ -384,7 +214,7 @@ void ChatClient::ProcessPacket(EPacketType messageType, std::shared_ptr<IBody> p
 		break;
 
 	default:
-		std::cout << (int)messageType << "메시지 타입 이거 뭐임?\n";
+		LOG_WARN("ChatClient") << "처리 불가한 패킷 타입: " << (int)messageType;
 		break;
 	}
 }
@@ -523,7 +353,7 @@ void ChatClient::ReqLogin(const std::string& username, bool isOldOkay)
 	strncpy_s(reqBody.username, MAX_USERNAME_LEN, username.c_str(), _TRUNCATE);
 
 	m_state = EState::WaitingLogIn;
-	SendPacket(m_serverSocket, EPacketType::LoginReq, reqBody);
+	SendPacket<EPacketType::LoginReq>(m_serverSocket, reqBody);
 }
 
 void ChatClient::ReqCreateRoom(const std::string& roomTitle)
@@ -531,7 +361,7 @@ void ChatClient::ReqCreateRoom(const std::string& roomTitle)
 	CreateRoomReqBody reqBody;
 	strncpy_s(reqBody.roomname, MAX_ROOM_TITLE_LEN, roomTitle.c_str(), _TRUNCATE);
 
-	SendPacket(m_serverSocket, EPacketType::RoomCreateReq, reqBody);
+	SendPacket<EPacketType::RoomCreateReq>(m_serverSocket, reqBody);
 }
 
 void ChatClient::ReqJoinRoom(UINT roomID)
@@ -540,7 +370,7 @@ void ChatClient::ReqJoinRoom(UINT roomID)
 	reqBody.roomID = roomID;
 	m_joinedRoomID = roomID; // 참여 요청한 방 ID를 기억
 
-	SendPacket(m_serverSocket, EPacketType::RoomJoinReq, reqBody);
+	SendPacket<EPacketType::RoomJoinReq>(m_serverSocket, reqBody);
 }
 
 void ChatClient::ReqQuitRoom()
@@ -548,7 +378,7 @@ void ChatClient::ReqQuitRoom()
 	QuitRoomReqBody reqBody;
 	reqBody.roomID = m_joinedRoomID;
 
-	SendPacket(m_serverSocket, EPacketType::RoomQuitReq, reqBody);
+	SendPacket<EPacketType::RoomQuitReq>(m_serverSocket, reqBody);
 	std::cout << "나갑니다..." << std::endl;
 
 	m_joinedRoomID = LOBBY_ID; // TODO : 초기화를 여기서?
@@ -561,7 +391,7 @@ void ChatClient::ReqUserList()
 {
 	UserListReqBody reqBody;
 
-	SendPacket(m_serverSocket, EPacketType::UserlistReq, reqBody);
+	SendPacket<EPacketType::UserlistReq>(m_serverSocket, reqBody);
 	std::cout << "유저 리스트 요청합니다..." << std::endl;
 }
 
@@ -569,7 +399,7 @@ void ChatClient::ReqRoomList()
 {
 	RoomListReqBody reqBody;
 
-	SendPacket(m_serverSocket, EPacketType::RoomlistReq, reqBody);
+	SendPacket<EPacketType::RoomlistReq>(m_serverSocket, reqBody);
 	std::cout << "룸 리스트 요청합니다..." << std::endl;
 }
 
@@ -595,7 +425,7 @@ void ChatClient::ReqWhisper(std::string_view targetUser, std::string_view messag
 	std::memcpy(reqBody.message, message.data(), message.length());
 	reqBody.message[message.length()] = '\0';
 
-	SendPacket(m_serverSocket, EPacketType::WhisperReq, reqBody);
+	SendPacket<EPacketType::WhisperReq>(m_serverSocket, reqBody);
 }
 
 void ChatClient::ReqChat(const std::string& message)
@@ -604,7 +434,7 @@ void ChatClient::ReqChat(const std::string& message)
 	reqBody.roomID = m_joinedRoomID;
 	strncpy_s(reqBody.message, MAX_MESSAGE_LEN, message.c_str(), _TRUNCATE);
 
-	SendPacket(m_serverSocket, EPacketType::ChattingReq, reqBody);
+	SendPacket<EPacketType::ChattingReq>(m_serverSocket, reqBody);
 }
 
 void ChatClient::ReqUpdateLastReadChat() // TODO : 곧 이 기능으로 마이그레이션
@@ -613,5 +443,5 @@ void ChatClient::ReqUpdateLastReadChat() // TODO : 곧 이 기능으로 마이�
 	reqBody.roomID = m_joinedRoomID;
 	reqBody.lastReadIndex = m_lastReadChatIndex;
 
-	SendPacket(m_serverSocket, EPacketType::ChattingConfirm, reqBody);
+	SendPacket<EPacketType::ChattingConfirm>(m_serverSocket, reqBody);
 }

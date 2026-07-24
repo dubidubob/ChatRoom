@@ -11,12 +11,9 @@ class Session
 {
 public:
     Session()
-        : m_assembler(&Session::CreateServerBody) {}; 
+        : m_assembler(&CreatePacketBody) {};
 
     void OnRecv(const char* buffer, int len, std::vector<ServerToManagerPacket>& packets);
-
-private:
-    static std::shared_ptr<IBody> CreateServerBody(const PacketHeader* header); // static : 상태 무관 함수라
 
 private:
     PacketAssembler<ServerToManagerPacket> m_assembler;

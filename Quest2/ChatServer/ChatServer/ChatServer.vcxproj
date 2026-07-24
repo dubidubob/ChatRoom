@@ -139,6 +139,8 @@
     <ClInclude Include="..\Common\ServerInternalTypes.h" />
     <ClInclude Include="..\Common\PacketAssembler.h" />
     <ClInclude Include="..\Common\Protocol.h" />
+    <ClInclude Include="..\Common\Logger.h" />
+    <ClInclude Include="..\Common\SafeQueue.h" />
     <ClInclude Include="ChatRoom.h" />
     <ClInclude Include="ChatManager.h" />
     <ClInclude Include="ChatServer.h" />
